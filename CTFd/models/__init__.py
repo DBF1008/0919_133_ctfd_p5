@@ -392,7 +392,12 @@ class Flags(db.Model):
 
 class Users(db.Model):
     __tablename__ = "users"
-    __table_args__ = (db.UniqueConstraint("id", "oauth_id"), {})
+    __table_args__ = (
+        db.UniqueConstraint("id", "oauth_id"),
+        # Composite index so scoreboard bracket filtering can use an index
+        db.Index("ix_users_bracket_id_banned_hidden", "bracket_id", "banned", "hidden"),
+        {},
+    )
     # Core attributes
     id = db.Column(db.Integer, primary_key=True)
     oauth_id = db.Column(db.Integer, unique=True)
@@ -557,36 +562,9 @@ class Users(db.Model):
 
     @cache.memoize()
     def get_score(self, admin=False):
-        score = db.func.sum(Challenges.value).label("score")
-        user = (
-            db.session.query(Solves.user_id, score)
-            .join(Users, Solves.user_id == Users.id)
-            .join(Challenges, Solves.challenge_id == Challenges.id)
-            .filter(Users.id == self.id)
-        )
+        from CTFd.utils.scores import get_account_score
 
-        award_score = db.func.sum(Awards.value).label("award_score")
-        award = db.session.query(award_score).filter_by(user_id=self.id)
-
-        if not admin:
-            freeze = Configs.query.filter_by(key="freeze").first()
-            if freeze and freeze.value:
-                freeze = int(freeze.value)
-                freeze = datetime.datetime.utcfromtimestamp(freeze)
-                user = user.filter(Solves.date < freeze)
-                award = award.filter(Awards.date < freeze)
-
-        user = user.group_by(Solves.user_id).first()
-        award = award.first()
-
-        if user and award:
-            return int(user.score or 0) + int(award.award_score or 0)
-        elif user:
-            return int(user.score or 0)
-        elif award:
-            return int(award.award_score or 0)
-        else:
-            return 0
+        return get_account_score(self.id, account_type="user", admin=admin)
 
     @cache.memoize()
     def get_place(self, admin=False, numeric=False):
@@ -618,7 +596,12 @@ class Admins(Users):
 
 class Teams(db.Model):
     __tablename__ = "teams"
-    __table_args__ = (db.UniqueConstraint("id", "oauth_id"), {})
+    __table_args__ = (
+        db.UniqueConstraint("id", "oauth_id"),
+        # Composite index so scoreboard bracket filtering can use an index
+        db.Index("ix_teams_bracket_id_banned_hidden", "bracket_id", "banned", "hidden"),
+        {},
+    )
     # Core attributes
     id = db.Column(db.Integer, primary_key=True)
     oauth_id = db.Column(db.Integer, unique=True)
@@ -841,10 +824,9 @@ class Teams(db.Model):
 
     @cache.memoize()
     def get_score(self, admin=False):
-        score = 0
-        for member in self.members:
-            score += member.get_score(admin=admin)
-        return score
+        from CTFd.utils.scores import get_account_score
+
+        return get_account_score(self.id, account_type="team", admin=admin)
 
     @cache.memoize()
     def get_place(self, admin=False, numeric=False):
